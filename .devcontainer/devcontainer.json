@@ -1,0 +1,20 @@
+{
+    "name": "Go DevContainer",
+    "dockerFile": "Dockerfile",
+    "context": "..",
+    "customizations": {
+        // Configure properties specific to VS Code.
+        "vscode": {
+            "settings": {
+                "go.gopath": "/workspace/go"
+            },
+            "extensions": [
+                "golang.Go"
+            ]
+        }
+    },
+    "mounts": [
+        "source=${localWorkspaceFolder},target=/workspace,type=bind"
+    ],
+    "remoteUser": "root"
+}

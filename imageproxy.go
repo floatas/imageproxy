@@ -91,6 +91,9 @@ type Proxy struct {
 	// PassRequestHeaders identifies HTTP headers to pass from inbound
 	// requests to the proxied server.
 	PassRequestHeaders []string
+
+	// Default image used when original is not found
+	DefaultImage string
 }
 
 // NewProxy constructs a new proxy.  The provided http RoundTripper will be
@@ -211,11 +214,26 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := p.Client.Do(actualReq)
 
-	if err != nil {
-		msg := fmt.Sprintf("error fetching remote image: %v", err)
-		p.log(msg)
-		http.Error(w, msg, http.StatusInternalServerError)
-		metricRemoteErrors.Inc()
+	if err != nil || (resp.StatusCode >= 400 && resp.StatusCode <= 599) {
+		if err != nil {
+			p.log(fmt.Sprintf("error fetching remote image: %v", err))
+		} else {
+			p.log(fmt.Sprintf("received HTTP error: %d %s", resp.StatusCode, http.StatusText(resp.StatusCode)))
+			// Close the response body if we received a response but it's an error
+			resp.Body.Close()
+		}
+
+		fragment := ""
+		originalURL := req.String()
+		if idx := strings.Index(originalURL, "#"); idx != -1 {
+			fragment = originalURL[idx+1:]
+		}
+		p.log(fmt.Sprintf("url fragment: %v", fragment))
+		if err = p.fetchDefaultImage(w, fragment); err != nil {
+			http.Error(w, "error fetching default image", http.StatusInternalServerError)
+			metricRemoteErrors.Inc()
+			return
+		}
 		return
 	}
 	// close the original resp.Body, even if we wrap it in a NopCloser below
@@ -275,6 +293,62 @@ func (p *Proxy) serveImage(w http.ResponseWriter, r *http.Request) {
 	if _, err := io.Copy(w, resp.Body); err != nil {
 		p.logf("error copying response: %v", err)
 	}
+}
+
+// fetchDefaultImage handles fetching and serving the default image.
+func (p *Proxy) fetchDefaultImage(w http.ResponseWriter, fragment string) error {
+	defaultImageURL := p.DefaultImage
+	if fragment != "" {
+		defaultImageURL = fmt.Sprintf("%s#%s", p.DefaultImage, fragment)
+	}
+
+	p.log(defaultImageURL)
+
+	defaultReq, err := http.NewRequest("GET", defaultImageURL, nil)
+	if err != nil {
+		p.log(fmt.Sprintf("error creating default image request: %v", err))
+		return err
+	}
+
+	resp, err := p.Client.Do(defaultReq)
+	if err != nil {
+		p.log(fmt.Sprintf("error fetching default image: %v", err))
+		return err
+	}
+	defer resp.Body.Close()
+
+	// Copy the headers from the default image response
+	copyHeader(w.Header(), resp.Header, "Cache-Control", "Last-Modified", "Expires", "Etag", "Link")
+
+	contentType, _, _ := mime.ParseMediaType(resp.Header.Get("Content-Type"))
+	if contentType == "" || contentType == "application/octet-stream" || contentType == "binary/octet-stream" {
+		// try to detect content type
+		b := bufio.NewReader(resp.Body)
+		resp.Body = io.NopCloser(b)
+		contentType = peekContentType(b)
+	}
+	w.Header().Set("Content-Type", contentType)
+
+	copyHeader(w.Header(), resp.Header, "Content-Length")
+
+	// Enable CORS for 3rd party applications
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Add a Content-Security-Policy to prevent stored-XSS attacks via SVG files
+	w.Header().Set("Content-Security-Policy", "script-src 'none'")
+
+	// Disable Content-Type sniffing
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
+	// Block potential XSS attacks especially in legacy browsers which do not support CSP
+	w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+	w.WriteHeader(resp.StatusCode)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		p.logf("error copying default image response: %v", err)
+		return err
+	}
+	return nil
 }
 
 // peekContentType peeks at the first 512 bytes of p, and attempts to detect

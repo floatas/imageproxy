@@ -20,8 +20,7 @@ RUN CGO_ENABLED=0 go build -v ./cmd/imageproxy
 # Final stage - minimal runtime image
 FROM cgr.dev/chainguard/static:latest
 
-# Create cache directory
-RUN mkdir -p /cache
+# Copy binary from build stage
 COPY --from=build /app/imageproxy /app/imageproxy
 
 EXPOSE 8080

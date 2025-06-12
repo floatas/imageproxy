@@ -29,4 +29,4 @@ COPY --from=build /app/imageproxy /app/imageproxy
 EXPOSE 8080
 
 ENTRYPOINT ["/app/imageproxy"]
-CMD ["-addr", "0.0.0.0:8080"]
+CMD ["-addr", "0.0.0.0:8080", "-cache", "/cache"]

@@ -17,8 +17,11 @@ COPY . .
 # Build the application
 RUN CGO_ENABLED=0 go build -v ./cmd/imageproxy
 
-# Final stage - minimal runtime image
-FROM cgr.dev/chainguard/static:latest
+# Final stage - debug-friendly image with shell
+FROM cgr.dev/chainguard/wolfi-base
+
+# Install useful debugging tools
+RUN apk add --no-cache bash curl file
 
 # Copy binary from build stage
 COPY --from=build /app/imageproxy /app/imageproxy
